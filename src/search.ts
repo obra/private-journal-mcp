@@ -1,10 +1,10 @@
-// ABOUTME: Journal search functionality with vector similarity and text matching
-// ABOUTME: Provides unified search across project and user journal entries
+// ABOUTME: Semantic search functionality for journal entries using embeddings
+// ABOUTME: Provides natural language search across journal content
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { EmbeddingService, EmbeddingData } from './embeddings';
-import { resolveUserJournalPath, resolveProjectJournalPath } from './paths';
+import { EmbeddingService, EmbeddingData } from './embeddings.js';
+import { resolveUserJournalPath, resolveProjectJournalPath } from './paths.js';
 
 export interface SearchResult {
   path: string;
