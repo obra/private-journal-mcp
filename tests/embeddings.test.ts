@@ -5,9 +5,9 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 
-import { EmbeddingService } from '../src/embeddings';
-import { SearchService } from '../src/search';
-import { JournalManager } from '../src/journal';
+import { EmbeddingService } from '../src/embeddings.js';
+import { SearchService } from '../src/search.js';
+import { JournalManager } from '../src/journal.js';
 
 describe('Embedding and Search functionality', () => {
   let projectTempDir: string;
