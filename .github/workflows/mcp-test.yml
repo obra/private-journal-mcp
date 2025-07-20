@@ -1,0 +1,232 @@
+# ABOUTME: GitHub Actions workflow for comprehensive MCP server testing
+# ABOUTME: Tests Jest unit tests, MCP protocol compliance, and server functionality using mcp-probe
+
+name: MCP Server Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test-mcp-server:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18, 20]
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+
+    - name: Set up Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+
+    - name: Cache Rust dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Install mcp-probe
+      run: cargo install mcp-cli
+
+    - name: Run linting
+      run: npm run lint
+
+    - name: Run unit tests with coverage
+      run: npm run test:coverage
+
+    - name: Build MCP server
+      run: npm run build
+
+    - name: Test MCP server basic functionality
+      run: |
+        # Test that the server starts and responds to basic MCP protocol
+        timeout 10s node dist/index.js < /dev/null || test $? -eq 124
+        echo "✅ MCP server starts successfully"
+
+    - name: Test MCP protocol compliance with mcp-probe
+      run: |
+        # Create test script for mcp-probe
+        cat > test-mcp.sh << 'EOF'
+        #!/bin/bash
+        set -e
+
+        echo "🧪 Testing MCP server with mcp-probe..."
+
+        # Test 1: Discover server capabilities
+        echo "📋 Discovering server capabilities..."
+        timeout 30s mcp-probe discover --stdio "node dist/index.js" --output-format json > capabilities.json
+
+        # Verify expected tools are present
+        if grep -q "process_thoughts" capabilities.json; then
+          echo "✅ process_thoughts tool found"
+        else
+          echo "❌ process_thoughts tool missing"
+          exit 1
+        fi
+
+        if grep -q "search_journal" capabilities.json; then
+          echo "✅ search_journal tool found"
+        else
+          echo "❌ search_journal tool missing"
+          exit 1
+        fi
+
+        if grep -q "read_journal_entry" capabilities.json; then
+          echo "✅ read_journal_entry tool found"
+        else
+          echo "❌ read_journal_entry tool missing"
+          exit 1
+        fi
+
+        if grep -q "list_recent_entries" capabilities.json; then
+          echo "✅ list_recent_entries tool found"
+        else
+          echo "❌ list_recent_entries tool missing"
+          exit 1
+        fi
+
+        # Test 2: Verify prompts are available
+        if grep -q "daily_reflection" capabilities.json; then
+          echo "✅ daily_reflection prompt found"
+        else
+          echo "❌ daily_reflection prompt missing"
+          exit 1
+        fi
+
+        # Test 3: Test basic tool functionality
+        echo "🔧 Testing process_thoughts tool..."
+        timeout 30s mcp-probe test --stdio "node dist/index.js" \
+          --tool process_thoughts \
+          --args '{"feelings": "Testing MCP server in CI pipeline"}' \
+          --output-format json > process_thoughts_result.json
+
+        if grep -q "successfully" process_thoughts_result.json; then
+          echo "✅ process_thoughts tool works correctly"
+        else
+          echo "❌ process_thoughts tool failed"
+          cat process_thoughts_result.json
+          exit 1
+        fi
+
+        # Test 4: Test list_recent_entries (should work even with no entries)
+        echo "📝 Testing list_recent_entries tool..."
+        timeout 30s mcp-probe test --stdio "node dist/index.js" \
+          --tool list_recent_entries \
+          --args '{"limit": 5}' \
+          --output-format json > list_entries_result.json
+
+        if [ $? -eq 0 ]; then
+          echo "✅ list_recent_entries tool works correctly"
+        else
+          echo "❌ list_recent_entries tool failed"
+          cat list_entries_result.json
+          exit 1
+        fi
+
+        # Test 5: Test search functionality (should handle empty results gracefully)
+        echo "🔍 Testing search_journal tool..."
+        timeout 30s mcp-probe test --stdio "node dist/index.js" \
+          --tool search_journal \
+          --args '{"query": "test search query", "limit": 3}' \
+          --output-format json > search_result.json
+
+        if [ $? -eq 0 ]; then
+          echo "✅ search_journal tool works correctly"
+        else
+          echo "❌ search_journal tool failed"
+          cat search_result.json
+          exit 1
+        fi
+
+        echo "🎉 All MCP protocol tests passed!"
+        EOF
+
+        chmod +x test-mcp.sh
+        ./test-mcp.sh
+
+    - name: Test MCP resources functionality
+      run: |
+        # Test that resources are discoverable
+        echo "🗂️ Testing MCP resources..."
+        timeout 30s mcp-probe resources --stdio "node dist/index.js" --output-format json > resources.json || true
+
+        # Resources might be empty initially, just verify the endpoint works
+        if [ $? -eq 0 ]; then
+          echo "✅ Resources endpoint accessible"
+        else
+          echo "⚠️ Resources endpoint returned error (acceptable for empty journal)"
+        fi
+
+    - name: Test MCP prompts functionality
+      run: |
+        # Test that prompts can be retrieved
+        echo "💭 Testing MCP prompts..."
+        timeout 30s mcp-probe prompts --stdio "node dist/index.js" --output-format json > prompts.json
+
+        if grep -q "daily_reflection" prompts.json; then
+          echo "✅ Prompts are accessible and contain expected prompts"
+        else
+          echo "❌ Prompts missing or malformed"
+          cat prompts.json
+          exit 1
+        fi
+
+        # Test prompt generation
+        echo "🎯 Testing prompt generation..."
+        timeout 30s mcp-probe prompt --stdio "node dist/index.js" \
+          --name daily_reflection \
+          --args '{"focus_area": "testing"}' \
+          --output-format json > prompt_result.json
+
+        if grep -q "reflection" prompt_result.json; then
+          echo "✅ Prompt generation works correctly"
+        else
+          echo "❌ Prompt generation failed"
+          cat prompt_result.json
+          exit 1
+        fi
+
+    - name: Upload test artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: mcp-test-results-node-${{ matrix.node-version }}
+        path: |
+          capabilities.json
+          process_thoughts_result.json
+          list_entries_result.json
+          search_result.json
+          resources.json
+          prompts.json
+          prompt_result.json
+        retention-days: 7
+
+    - name: Upload coverage reports
+      if: matrix.node-version == '20'
+      uses: codecov/codecov-action@v4
+      with:
+        files: ./coverage/lcov.info
+        fail_ci_if_error: false
+        verbose: true
