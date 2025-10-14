@@ -2,7 +2,7 @@
 // ABOUTME: Tests cross-platform fallback logic and environment handling
 
 import * as path from 'path';
-import { resolveJournalPath, resolveUserJournalPath, resolveProjectJournalPath } from '../src/paths';
+import { resolveJournalPath, resolveUserJournalPath, resolveProjectJournalPath } from '../src/paths.js';
 
 describe('Path resolution utilities', () => {
   let originalEnv: NodeJS.ProcessEnv;

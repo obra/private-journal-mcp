@@ -4,8 +4,8 @@
 // ABOUTME: Handles command line arguments and starts the server
 
 import * as path from 'path';
-import { PrivateJournalServer } from './server';
-import { resolveProjectJournalPath } from './paths';
+import { PrivateJournalServer } from './server.js';
+import { resolveProjectJournalPath } from './paths.js';
 
 function parseArguments(): string {
   const args = process.argv.slice(2);
