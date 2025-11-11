@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/obra-private-journal-mcp-badge.png)](https://mseep.ai/app/obra-private-journal-mcp)
+
 # Private Journal MCP Server
 
 A comprehensive MCP (Model Context Protocol) server that provides Claude with private journaling and semantic search capabilities for processing thoughts, feelings, and insights.
