@@ -42,7 +42,7 @@ This is an MCP (Model Context Protocol) server that provides Claude with private
 
 **Key Architecture Patterns:**
 - **Path Resolution Strategy**: Falls back through CWD → HOME → temp directories, avoiding system roots
-- **Timestamped Storage**: Uses `YYYY-MM-DD/HH-MM-SS-μμμμμμ.md` structure with microsecond precision
+- **Timestamped Storage**: Uses `YYYY-MM-DD/HH-MM-SS-NNNNNN.md` structure with milliseconds plus random suffix for uniqueness
 - **YAML Frontmatter**: Each entry includes structured metadata (title, ISO date, Unix timestamp)
 - **MCP Tool Pattern**: Single tool registration with schema validation and error handling
 
