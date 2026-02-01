@@ -153,8 +153,19 @@ export class SearchService {
   }
 
   async readEntry(filePath: string): Promise<string | null> {
+    const resolvedPath = path.resolve(filePath);
+    const normalizedProjectPath = path.resolve(this.projectPath);
+    const normalizedUserPath = path.resolve(this.userPath);
+
+    const isWithinProject = resolvedPath.startsWith(normalizedProjectPath + path.sep);
+    const isWithinUser = resolvedPath.startsWith(normalizedUserPath + path.sep);
+
+    if (!isWithinProject && !isWithinUser) {
+      throw new Error('Access denied: path is outside journal directories');
+    }
+
     try {
-      return await fs.readFile(filePath, 'utf8');
+      return await fs.readFile(resolvedPath, 'utf8');
     } catch (error) {
       if ((error as any)?.code === 'ENOENT') {
         return null;
