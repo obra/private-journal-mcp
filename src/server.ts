@@ -8,7 +8,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { JournalManager } from './journal';
-import { ProcessFeelingsRequest, ProcessThoughtsRequest } from './types';
+import { ProcessThoughtsRequest } from './types';
 import { SearchService } from './search';
 
 export class PrivateJournalServer {
@@ -137,27 +137,6 @@ export class PrivateJournalServer {
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const args = request.params.arguments as Record<string, unknown>;
-
-      if (request.params.name === 'process_feelings') {
-        if (!args || typeof args.diary_entry !== 'string') {
-          throw new Error('diary_entry is required and must be a string');
-        }
-
-        try {
-          await this.journalManager.writeEntry(args.diary_entry);
-          return {
-            content: [
-              {
-                type: 'text',
-                text: 'Journal entry recorded successfully.',
-              },
-            ],
-          };
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-          throw new Error(`Failed to write journal entry: ${errorMessage}`);
-        }
-      }
 
       if (request.params.name === 'process_thoughts') {
         const thoughts = {

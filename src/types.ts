@@ -11,10 +11,6 @@ export interface ServerConfig {
   journalPath: string;
 }
 
-export interface ProcessFeelingsRequest {
-  diary_entry: string;
-}
-
 export interface ProcessThoughtsRequest {
   feelings?: string;
   project_notes?: string;
