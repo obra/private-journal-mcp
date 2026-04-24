@@ -320,19 +320,41 @@ export class PrivateJournalServer {
   }
 
   async run(): Promise<void> {
-    // Generate missing embeddings on startup
-    try {
-      console.error('Checking for missing embeddings...');
-      const count = await this.journalManager.generateMissingEmbeddings();
-      if (count > 0) {
-        console.error(`Generated embeddings for ${count} existing journal entries.`);
-      }
-    } catch (error) {
-      console.error('Failed to generate missing embeddings on startup:', error);
-      // Don't fail startup if embedding generation fails
-    }
-
+    // Connect transport BEFORE warming the embedding model. The backfill
+    // pulls in @xenova/transformers + onnxruntime-web (~37 MB of wasm and a
+    // deep ESM dep tree), which on cold cache + recent Node releases can
+    // exceed the MCP client's initialize-handshake timeout and crash the
+    // process with ETIMEDOUT inside Node's synchronous ESM source loader.
+    // The MCP server can serve every tool except `search_journal` without
+    // the model loaded; `search_journal` triggers the model lazily on
+    // first call. Backfill of missing embeddings is a best-effort warm-up
+    // that runs in the background after we've ACKed the handshake.
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
+
+    this.warmEmbeddingsInBackground();
+  }
+
+  // Internal hook — exposed as a private method (rather than inlined) so
+  // tests can spy on it and assert run() doesn't await its completion.
+  // Returns the backgrounded promise so callers that *do* want to await
+  // it (tests, or a future --warm-on-start flag) have a handle.
+  private warmEmbeddingsInBackground(): Promise<void> {
+    const task = (async () => {
+      try {
+        console.error('Checking for missing embeddings (background)...');
+        const count = await this.journalManager.generateMissingEmbeddings();
+        if (count > 0) {
+          console.error(`Generated embeddings for ${count} existing journal entries.`);
+        }
+      } catch (error) {
+        console.error('Failed to generate missing embeddings on startup:', error);
+        // Don't fail startup if embedding generation fails
+      }
+    })();
+    // Swallow rejections so an unhandled promise rejection can't kill the
+    // process — the inner try/catch already logs, this is belt-and-braces.
+    task.catch(() => { /* logged above */ });
+    return task;
   }
 }
