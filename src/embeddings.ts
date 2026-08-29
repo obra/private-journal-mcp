@@ -1,7 +1,16 @@
 // ABOUTME: Local embedding service using transformers for semantic journal search
 // ABOUTME: Provides text embedding generation and similarity computation utilities
 
-import { pipeline, FeatureExtractionPipeline } from '@xenova/transformers';
+// `@xenova/transformers` (and its onnxruntime-web dep) is heavy enough at
+// ESM-load time that on cold cache + recent Node releases the synchronous
+// source-loader has been observed to ETIMEDOUT during `getSourceSync`,
+// crashing the MCP server before it can respond to the initialize
+// handshake. The actual `pipeline` symbol is only needed inside
+// `doInitialize()`, so we type-only-import it here and use a dynamic
+// import at call time. That keeps the hot path of starting the server
+// (and serving every non-search tool) free of the transformers module
+// graph entirely.
+import type { FeatureExtractionPipeline } from '@xenova/transformers';
 import * as fs from 'fs/promises';
 
 export interface EmbeddingData {
@@ -52,8 +61,11 @@ export class EmbeddingService {
     });
     try {
       console.error('Loading embedding model...');
+      // Dynamic import — the @xenova/transformers module graph is only
+      // loaded the first time someone actually asks for an embedding.
+      const { pipeline } = await import('@xenova/transformers');
       this.extractor = await Promise.race([
-        pipeline('feature-extraction', this.modelName),
+        pipeline('feature-extraction', this.modelName) as unknown as Promise<FeatureExtractionPipeline>,
         timeoutPromise,
       ]);
       console.error('Embedding model loaded successfully');
