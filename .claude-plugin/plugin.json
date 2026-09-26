@@ -1,0 +1,19 @@
+{
+  "name": "private-journal-mcp",
+  "description": "A lightweight MCP server that provides Claude with a private journaling and reflection capability",
+  "version": "2.0.1",
+  "author": {
+    "name": "Jesse Vincent",
+    "email": "jesse@fsck.com"
+  },
+  "homepage": "https://github.com/obra/private-journal-mcp",
+  "repository": "https://github.com/obra/private-journal-mcp",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "journal",
+    "private",
+    "claude",
+    "ai"
+  ]
+}
