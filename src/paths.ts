@@ -1,6 +1,7 @@
 // ABOUTME: Path resolution utilities for journal storage locations
 // ABOUTME: Provides cross-platform fallback logic for finding suitable directories
 
+import * as fs from 'fs';
 import * as path from 'path';
 
 /**
@@ -76,6 +77,20 @@ export function resolveProjectJournalPath(): string {
  * @returns true if both resolve to the same directory
  */
 export function isSameJournalPath(a: string, b: string): boolean {
+  // Ask the filesystem first: the same device and inode is the same directory,
+  // however the paths are spelled (letter case, links, '..' segments).
+  try {
+    // bigint keeps 64-bit Windows file IDs exact
+    const statA = fs.statSync(a, { bigint: true });
+    const statB = fs.statSync(b, { bigint: true });
+    // Some filesystems (FAT, some network shares) report inode 0 for everything
+    if (statA.ino !== 0n && statB.ino !== 0n) {
+      return statA.dev === statB.dev && statA.ino === statB.ino;
+    }
+  } catch {
+    // A directory that doesn't exist yet has no identity to compare
+  }
+
   const normalize = (p: string): string => {
     const resolved = path.resolve(p);
     // Windows paths are case-insensitive
