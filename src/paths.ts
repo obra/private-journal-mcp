@@ -67,3 +67,19 @@ export function resolveUserJournalPath(): string {
 export function resolveProjectJournalPath(): string {
   return resolveJournalPath('.private-journal', true);
 }
+
+/**
+ * Checks whether two journal paths point at the same directory, e.g. when
+ * PRIVATE_JOURNAL_PATH makes the project and user journals identical
+ * @param a - first journal path
+ * @param b - second journal path
+ * @returns true if both resolve to the same directory
+ */
+export function isSameJournalPath(a: string, b: string): boolean {
+  const normalize = (p: string): string => {
+    const resolved = path.resolve(p);
+    // Windows paths are case-insensitive
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  return normalize(a) === normalize(b);
+}
