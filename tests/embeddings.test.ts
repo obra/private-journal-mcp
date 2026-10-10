@@ -378,6 +378,38 @@ TypeScript interfaces are really powerful for maintaining code quality.`;
 
       expect(results).toHaveLength(1);
     });
+
+    test('a root reached through a directory link counts as the same directory', async () => {
+      const linkParent = await fs.mkdtemp(path.join(os.tmpdir(), 'journal-link-root-test-'));
+      const linkedRoot = path.join(linkParent, 'journal');
+      // 'junction' lets Windows create the link without admin rights;
+      // other platforms ignore the type and create a normal symlink.
+      await fs.symlink(sharedDir, linkedRoot, 'junction');
+
+      try {
+        const search = new SearchService(sharedDir, linkedRoot);
+        await sharedManager.writeThoughts({ reflections: 'Entry under a linked root' });
+
+        const results = await search.search('linked root');
+
+        expect(results).toHaveLength(1);
+      } finally {
+        await fs.rm(linkParent, { recursive: true, force: true });
+      }
+    });
+
+    test('a root spelled with different letter case counts as the same directory where the filesystem ignores case', async () => {
+      // On case-insensitive filesystems (Windows, default macOS) this names the
+      // same directory; on case-sensitive ones it names a directory that
+      // doesn't exist, so either way the entry must come back once.
+      const recased = path.join(path.dirname(sharedDir), path.basename(sharedDir).toUpperCase());
+      const search = new SearchService(sharedDir, recased);
+      await sharedManager.writeThoughts({ reflections: 'Entry under a recased root' });
+
+      const results = await search.search('recased root');
+
+      expect(results).toHaveLength(1);
+    });
   });
 
   describe('initialization timeout', () => {
