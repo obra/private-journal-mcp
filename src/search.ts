@@ -4,7 +4,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { EmbeddingService, EmbeddingData } from './embeddings.js';
-import { resolveUserJournalPath, resolveProjectJournalPath } from './paths.js';
+import { resolveUserJournalPath, resolveProjectJournalPath, isSameJournalPath } from './paths.js';
 
 export interface SearchResult {
   path: string;
@@ -58,18 +58,7 @@ export class SearchService {
     // Generate query embedding
     const queryEmbedding = await this.embeddingService.generateEmbedding(query);
 
-    // Collect all embeddings
-    const allEmbeddings: Array<EmbeddingData & { type: 'project' | 'user' }> = [];
-
-    if (type === 'both' || type === 'project') {
-      const projectEmbeddings = await this.loadEmbeddingsFromPath(this.projectPath, 'project');
-      allEmbeddings.push(...projectEmbeddings);
-    }
-
-    if (type === 'both' || type === 'user') {
-      const userEmbeddings = await this.loadEmbeddingsFromPath(this.userPath, 'user');
-      allEmbeddings.push(...userEmbeddings);
-    }
+    const allEmbeddings = await this.loadEmbeddings(type);
 
     // Filter by criteria
     const filtered = allEmbeddings.filter(embedding => {
@@ -123,17 +112,7 @@ export class SearchService {
       dateRange
     } = options;
 
-    const allEmbeddings: Array<EmbeddingData & { type: 'project' | 'user' }> = [];
-
-    if (type === 'both' || type === 'project') {
-      const projectEmbeddings = await this.loadEmbeddingsFromPath(this.projectPath, 'project');
-      allEmbeddings.push(...projectEmbeddings);
-    }
-
-    if (type === 'both' || type === 'user') {
-      const userEmbeddings = await this.loadEmbeddingsFromPath(this.userPath, 'user');
-      allEmbeddings.push(...userEmbeddings);
-    }
+    const allEmbeddings = await this.loadEmbeddings(type);
 
     // Filter by date range
     const filtered = dateRange ? allEmbeddings.filter(embedding => {
@@ -240,6 +219,25 @@ export class SearchService {
     return roots.some(
       root => candidate === root || candidate.startsWith(root + path.sep)
     );
+  }
+
+  private async loadEmbeddings(
+    type: 'project' | 'user' | 'both'
+  ): Promise<Array<EmbeddingData & { type: 'project' | 'user' }>> {
+    const embeddings: Array<EmbeddingData & { type: 'project' | 'user' }> = [];
+
+    if (type === 'both' || type === 'project') {
+      embeddings.push(...await this.loadEmbeddingsFromPath(this.projectPath, 'project'));
+    }
+
+    // When both journals live in one directory, it was already loaded above;
+    // loading it again would return every entry twice.
+    const alreadyLoaded = type === 'both' && isSameJournalPath(this.projectPath, this.userPath);
+    if ((type === 'both' || type === 'user') && !alreadyLoaded) {
+      embeddings.push(...await this.loadEmbeddingsFromPath(this.userPath, 'user'));
+    }
+
+    return embeddings;
   }
 
   private async loadEmbeddingsFromPath(

@@ -318,6 +318,100 @@ TypeScript interfaces are really powerful for maintaining code quality.`;
     });
   });
 
+  describe('when project and user journals share one directory', () => {
+    // PRIVATE_JOURNAL_PATH resolves both roots to the same directory.
+    let sharedDir: string;
+    let sharedManager: JournalManager;
+    let sharedSearch: SearchService;
+
+    beforeEach(async () => {
+      sharedDir = await fs.mkdtemp(path.join(os.tmpdir(), 'journal-shared-test-'));
+      sharedManager = new JournalManager(sharedDir, sharedDir);
+      sharedSearch = new SearchService(sharedDir, sharedDir);
+    });
+
+    afterEach(async () => {
+      await fs.rm(sharedDir, { recursive: true, force: true });
+    });
+
+    test('search returns each entry once', async () => {
+      await sharedManager.writeThoughts({ reflections: 'A single shared entry' });
+
+      const results = await sharedSearch.search('shared entry');
+
+      expect(results).toHaveLength(1);
+    });
+
+    test('readRecentEntries returns each entry once', async () => {
+      await sharedManager.writeThoughts({ reflections: 'First shared entry' });
+      await new Promise(resolve => setTimeout(resolve, 50));
+      await sharedManager.writeThoughts({ reflections: 'Second shared entry' });
+
+      const results = await sharedSearch.readRecentEntries({ limit: 5 });
+
+      expect(results).toHaveLength(2);
+      expect(results[0].content).toContain('Second shared entry');
+      expect(results[1].content).toContain('First shared entry');
+    });
+
+    test('writeThoughts keeps project and personal sections in one entry', async () => {
+      await sharedManager.writeThoughts({
+        project_notes: 'Project half of the entry',
+        reflections: 'Personal half of the entry'
+      });
+
+      const [dayDir] = await fs.readdir(sharedDir);
+      const mdFiles = (await fs.readdir(path.join(sharedDir, dayDir))).filter(f => f.endsWith('.md'));
+      expect(mdFiles).toHaveLength(1);
+
+      const content = await fs.readFile(path.join(sharedDir, dayDir, mdFiles[0]), 'utf8');
+      expect(content).toContain('## Project Notes\n\nProject half of the entry');
+      expect(content).toContain('## Reflections\n\nPersonal half of the entry');
+    });
+
+    test('roots that differ only in spelling count as the same directory', async () => {
+      const respelled = path.join(sharedDir, 'sub', '..');
+      const search = new SearchService(sharedDir, respelled);
+      await sharedManager.writeThoughts({ reflections: 'Entry under a respelled root' });
+
+      const results = await search.search('respelled root');
+
+      expect(results).toHaveLength(1);
+    });
+
+    test('a root reached through a directory link counts as the same directory', async () => {
+      const linkParent = await fs.mkdtemp(path.join(os.tmpdir(), 'journal-link-root-test-'));
+      const linkedRoot = path.join(linkParent, 'journal');
+      // 'junction' lets Windows create the link without admin rights;
+      // other platforms ignore the type and create a normal symlink.
+      await fs.symlink(sharedDir, linkedRoot, 'junction');
+
+      try {
+        const search = new SearchService(sharedDir, linkedRoot);
+        await sharedManager.writeThoughts({ reflections: 'Entry under a linked root' });
+
+        const results = await search.search('linked root');
+
+        expect(results).toHaveLength(1);
+      } finally {
+        await fs.rm(linkParent, { recursive: true, force: true });
+      }
+    });
+
+    test('a root spelled with different letter case counts as the same directory where the filesystem ignores case', async () => {
+      // On case-insensitive filesystems (Windows, default macOS) this names the
+      // same directory; on case-sensitive ones it names a directory that
+      // doesn't exist, so either way the entry must come back once.
+      const recased = path.join(path.dirname(sharedDir), path.basename(sharedDir).toUpperCase());
+      const search = new SearchService(sharedDir, recased);
+      await sharedManager.writeThoughts({ reflections: 'Entry under a recased root' });
+
+      const results = await search.search('recased root');
+
+      expect(results).toHaveLength(1);
+    });
+  });
+
   describe('initialization timeout', () => {
     let originalPipelineMock: jest.Mock;
 

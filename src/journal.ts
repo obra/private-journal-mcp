@@ -3,7 +3,7 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { resolveUserJournalPath } from './paths.js';
+import { resolveUserJournalPath, isSameJournalPath } from './paths.js';
 import { EmbeddingService, EmbeddingData } from './embeddings.js';
 
 export class JournalManager {
@@ -26,7 +26,18 @@ export class JournalManager {
     world_knowledge?: string;
   }): Promise<void> {
     const timestamp = new Date();
-    
+
+    // When both journals live in one directory, keep the entry in one file.
+    // Splitting it would leave two files with the same timestamp, which also
+    // risks one overwriting the other if their random suffixes collide.
+    if (isSameJournalPath(this.projectJournalPath, this.userJournalPath)) {
+      const hasContent = Object.values(thoughts).some(value => value !== undefined);
+      if (hasContent) {
+        await this.writeThoughtsToLocation(thoughts, timestamp, this.projectJournalPath);
+      }
+      return;
+    }
+
     // Split thoughts into project-local and user-global
     const projectThoughts = { project_notes: thoughts.project_notes };
     const userThoughts = {
@@ -179,7 +190,9 @@ ${sections.join('\n\n')}
 
   async generateMissingEmbeddings(): Promise<number> {
     let count = 0;
-    const paths = [this.projectJournalPath, this.userJournalPath];
+    const paths = isSameJournalPath(this.projectJournalPath, this.userJournalPath)
+      ? [this.projectJournalPath]
+      : [this.projectJournalPath, this.userJournalPath];
     
     for (const basePath of paths) {
       try {
