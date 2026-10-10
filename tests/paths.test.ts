@@ -32,7 +32,7 @@ describe('Path resolution utilities', () => {
       process.env.HOME = '/Users/test';
       
       const result = resolveJournalPath('.private-journal', true);
-      expect(result).toBe('/Users/test/.private-journal');
+      expect(result).toBe(path.join('/Users/test', '.private-journal'));
     });
   });
 
@@ -41,7 +41,7 @@ describe('Path resolution utilities', () => {
     delete process.env.USERPROFILE;
     
     const result = resolveJournalPath('.private-journal', false);
-    expect(result).toBe('/Users/test/.private-journal');
+    expect(result).toBe(path.join('/Users/test', '.private-journal'));
   });
 
   test('resolveJournalPath uses USERPROFILE on Windows', () => {
@@ -59,7 +59,7 @@ describe('Path resolution utilities', () => {
     delete process.env.TMP;
     
     const result = resolveJournalPath('.private-journal', false);
-    expect(result).toBe('/tmp/.private-journal');
+    expect(result).toBe(path.join('/tmp', '.private-journal'));
   });
 
   test('resolveUserJournalPath excludes current directory', () => {
@@ -68,7 +68,7 @@ describe('Path resolution utilities', () => {
     process.env.HOME = '/Users/test';
     
     const result = resolveUserJournalPath();
-    expect(result).toBe('/Users/test/.private-journal');
+    expect(result).toBe(path.join('/Users/test', '.private-journal'));
     expect(result).not.toContain('projects/my-app');
   });
 
@@ -88,8 +88,8 @@ describe('Path resolution utilities', () => {
     const userPath = resolveUserJournalPath();
     const projectPath = resolveProjectJournalPath();
 
-    expect(userPath).toBe('/Users/test/.private-journal');
-    expect(projectPath).toBe('/Users/test/.private-journal');
+    expect(userPath).toBe(path.join('/Users/test', '.private-journal'));
+    expect(projectPath).toBe(path.join('/Users/test', '.private-journal'));
   });
 
   describe('PRIVATE_JOURNAL_PATH override', () => {
