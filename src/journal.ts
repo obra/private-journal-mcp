@@ -4,7 +4,17 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { resolveUserJournalPath } from './paths.js';
-import { EmbeddingService, EmbeddingData } from './embeddings.js';
+import { EmbeddingService } from './embeddings.js';
+import { backfillEntryFile, isJournalEntryFilename } from './entry-files.js';
+
+// Result of a process_thoughts write. `indexed: false` means the entry was written to disk
+// (the .md file exists) but the embedding step failed even after a retry, so it will not
+// show up in list_recent_entries or search_journal until it's reconciled on a later read.
+// `errors` carries the underlying failure message(s) for the caller to surface.
+export interface WriteThoughtsResult {
+  indexed: boolean;
+  errors: string[];
+}
 
 export class JournalManager {
   private projectJournalPath: string;
@@ -24,7 +34,7 @@ export class JournalManager {
     user_context?: string;
     technical_insights?: string;
     world_knowledge?: string;
-  }): Promise<void> {
+  }): Promise<WriteThoughtsResult> {
     const timestamp = new Date();
     
     // Split thoughts into project-local and user-global
@@ -36,17 +46,24 @@ export class JournalManager {
       technical_insights: thoughts.technical_insights,
       world_knowledge: thoughts.world_knowledge
     };
+
+    const results: WriteThoughtsResult[] = [];
     
     // Write project notes to project directory
     if (projectThoughts.project_notes) {
-      await this.writeThoughtsToLocation(projectThoughts, timestamp, this.projectJournalPath);
+      results.push(await this.writeThoughtsToLocation(projectThoughts, timestamp, this.projectJournalPath));
     }
     
     // Write user thoughts to user directory
     const hasUserContent = Object.values(userThoughts).some(value => value !== undefined);
     if (hasUserContent) {
-      await this.writeThoughtsToLocation(userThoughts, timestamp, this.userJournalPath);
+      results.push(await this.writeThoughtsToLocation(userThoughts, timestamp, this.userJournalPath));
     }
+
+    return {
+      indexed: results.every(r => r.indexed),
+      errors: results.flatMap(r => r.errors),
+    };
   }
 
   private formatDate(date: Date): string {
@@ -75,7 +92,7 @@ export class JournalManager {
     },
     timestamp: Date,
     basePath: string
-  ): Promise<void> {
+  ): Promise<WriteThoughtsResult> {
     const dateString = this.formatDate(timestamp);
     const timeString = this.formatTimestamp(timestamp);
     
@@ -88,8 +105,14 @@ export class JournalManager {
     const formattedEntry = this.formatThoughts(thoughts, timestamp);
     await fs.writeFile(filePath, formattedEntry, 'utf8');
 
-    // Generate and save embedding
-    await this.generateEmbeddingForEntry(filePath, formattedEntry, timestamp);
+    // Generate and save embedding. The .md write above has already succeeded by this point;
+    // a failure here must not be reported as a plain success (see writeThoughts/server.ts),
+    // but it also must not undo or re-attempt the .md write itself.
+    const embeddingResult = await this.generateEmbeddingForEntry(filePath, formattedEntry, timestamp);
+    if (embeddingResult.indexed) {
+      return { indexed: true, errors: [] };
+    }
+    return { indexed: false, errors: [`${filePath}: ${embeddingResult.error ?? 'unknown error'}`] };
   }
 
   private formatThoughts(thoughts: {
@@ -152,29 +175,13 @@ ${sections.join('\n\n')}
     filePath: string,
     content: string,
     timestamp: Date
-  ): Promise<void> {
-    try {
-      const { text, sections } = this.embeddingService.extractSearchableText(content);
-      
-      if (text.trim().length === 0) {
-        return; // Skip empty entries
-      }
-
-      const embedding = await this.embeddingService.generateEmbedding(text);
-      
-      const embeddingData: EmbeddingData = {
-        embedding,
-        text,
-        sections,
-        timestamp: timestamp.getTime(),
-        path: filePath
-      };
-
-      await this.embeddingService.saveEmbedding(filePath, embeddingData);
-    } catch (error) {
-      console.error(`Failed to generate embedding for ${filePath}:`, error);
-      // Don't throw - embedding failure shouldn't prevent journal writing
-    }
+  ): Promise<{ indexed: boolean; error?: string }> {
+    // Delegates to EmbeddingService, which retries once on failure. Never throws -- an
+    // embedding failure must not prevent the journal entry itself from being written --
+    // but the outcome is now reported back up to writeThoughts/server.ts instead of being
+    // silently discarded, so a caller can tell a plain success from "written but not indexed".
+    const result = await this.embeddingService.generateAndSaveEmbedding(filePath, content, timestamp);
+    return { indexed: result.indexed, error: result.error };
   }
 
   async generateMissingEmbeddings(): Promise<number> {
@@ -194,7 +201,7 @@ ${sections.join('\n\n')}
           }
 
           const files = await fs.readdir(dayPath);
-          const mdFiles = files.filter(file => file.endsWith('.md'));
+          const mdFiles = files.filter(isJournalEntryFilename);
 
           for (const mdFile of mdFiles) {
             const mdPath = path.join(dayPath, mdFile);
@@ -206,9 +213,7 @@ ${sections.join('\n\n')}
             } catch {
               // Generate missing embedding
               console.error(`Generating missing embedding for ${mdPath}`);
-              const content = await fs.readFile(mdPath, 'utf8');
-              const timestamp = this.extractTimestampFromPath(mdPath) || new Date();
-              await this.generateEmbeddingForEntry(mdPath, content, timestamp);
+              await backfillEntryFile(this.embeddingService, mdPath, dayDir);
               count++;
             }
           }
@@ -221,23 +226,6 @@ ${sections.join('\n\n')}
     }
     
     return count;
-  }
-
-  private extractTimestampFromPath(filePath: string): Date | null {
-    const filename = path.basename(filePath, '.md');
-    const match = filename.match(/^(\d{2})-(\d{2})-(\d{2})-\d{6}$/);
-    
-    if (!match) return null;
-    
-    const [, hours, minutes, seconds] = match;
-    const dirName = path.basename(path.dirname(filePath));
-    const dateMatch = dirName.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    
-    if (!dateMatch) return null;
-    
-    const [, year, month, day] = dateMatch;
-    return new Date(parseInt(year), parseInt(month) - 1, parseInt(day), 
-                   parseInt(hours), parseInt(minutes), parseInt(seconds));
   }
 
   private async ensureDirectoryExists(dirPath: string): Promise<void> {

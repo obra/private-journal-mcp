@@ -12,12 +12,30 @@ export interface EmbeddingData {
   path: string;
 }
 
+// Result of attempting to index a journal entry for list_recent_entries / search_journal.
+// `indexed: false` means the .md file exists on disk but has no .embedding sidecar, so the
+// entry won't show up in either tool until it's reconciled (see SearchService) or the write
+// is retried.
+export interface EmbeddingWriteResult {
+  indexed: boolean;
+  error?: string;
+  data?: EmbeddingData;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 export class EmbeddingService {
   private static instance: EmbeddingService;
   private extractor: FeatureExtractionPipeline | null = null;
   private readonly modelName = 'Xenova/all-MiniLM-L6-v2';
   private initPromise: Promise<void> | null = null;
   initTimeoutMs = 30_000;
+  // One short retry before an entry is reported as unindexed. Covers transient failures
+  // (model init timeout, momentary resource contention from concurrent journal writes)
+  // without masking a persistently broken embedding pipeline.
+  embeddingRetryDelayMs = 200;
 
   private constructor() {}
 
@@ -106,9 +124,53 @@ export class EmbeddingService {
     return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
   }
 
+  // Writes via a temp file in the same directory, then renames over the real path. rename()
+  // is atomic on the same filesystem, so a concurrent reader (the read-time backfill in
+  // SearchService can run alongside the startup repair, or alongside another write, all in
+  // one process per session) never observes a partially-written .embedding file.
   async saveEmbedding(filePath: string, embeddingData: EmbeddingData): Promise<void> {
     const embeddingPath = filePath.replace(/\.md$/, '.embedding');
-    await fs.writeFile(embeddingPath, JSON.stringify(embeddingData, null, 2), 'utf8');
+    const tempPath = `${embeddingPath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    await fs.writeFile(tempPath, JSON.stringify(embeddingData, null, 2), 'utf8');
+    await fs.rename(tempPath, embeddingPath);
+  }
+
+  // Generates and persists the .embedding sidecar for a journal entry, retrying once after
+  // a short delay on failure. Never throws: callers (JournalManager on write, SearchService
+  // on read-time reconciliation) need to keep going -- an entry that can't be indexed should
+  // still be reported as written, or should simply stay unindexed for a read-time retry,
+  // rather than aborting the write or the read.
+  async generateAndSaveEmbedding(
+    filePath: string,
+    content: string,
+    timestamp: Date
+  ): Promise<EmbeddingWriteResult> {
+    const build = async (): Promise<EmbeddingData | null> => {
+      const { text, sections } = this.extractSearchableText(content);
+      if (text.trim().length === 0) {
+        return null; // Nothing to index for an entry with no body text.
+      }
+      const embedding = await this.generateEmbedding(text);
+      return { embedding, text, sections, timestamp: timestamp.getTime(), path: filePath };
+    };
+
+    try {
+      const data = await build();
+      if (data) await this.saveEmbedding(filePath, data);
+      return { indexed: true, data: data ?? undefined };
+    } catch (firstError) {
+      console.error(`Failed to generate embedding for ${filePath}, retrying once:`, firstError);
+      await delay(this.embeddingRetryDelayMs);
+      try {
+        const data = await build();
+        if (data) await this.saveEmbedding(filePath, data);
+        return { indexed: true, data: data ?? undefined };
+      } catch (secondError) {
+        const message = secondError instanceof Error ? secondError.message : String(secondError);
+        console.error(`Failed to generate embedding for ${filePath} after retry:`, secondError);
+        return { indexed: false, error: message };
+      }
+    }
   }
 
   async loadEmbedding(filePath: string): Promise<EmbeddingData | null> {
