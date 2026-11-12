@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.0.2] - 2026-11-12
+
+### Fixed
+
+- Journal entries that failed to embed were silently reported as indexed, so they never showed up in `search_journal` or `list_recent_entries` until an unrelated read happened to reconcile them. `writeThoughts` and the read-time backfill now report indexing failures and retry once before giving up (#29).
+- Project and user journals that resolve to the same directory (e.g. via `PRIVATE_JOURNAL_PATH`, or running from the home directory) no longer double-write and double-index every entry (#27, thanks @AndrewSpell).
+
+### Changed
+
+- The MCP `initialize` handshake no longer blocks on embedding model warm-up, so the server responds immediately even on a cold model cache; missing embeddings are now backfilled in the background after startup (#22).
+- Dependency updates: `@types/node`, `prettier`, and `typescript` bumped to their latest non-major releases; `npm audit fix` applied for the `tar-fs` symlink validation bypass (GHSA-vj76-c3g6-qr5v).
+
+### Added
+
+- `.claude-plugin/plugin.json` so the Claude Code plugin marketplace can validate this package as a plugin (#25).
+- `.github/workflows/publish.yml`: tagging a `v*` release now runs the build and test suite and publishes to npm automatically via npm's trusted-publishing (OIDC) flow, no long-lived `NPM_TOKEN` secret required.
+
 ## [2.0.1] - 2026-06-12
 
 ### Fixed
