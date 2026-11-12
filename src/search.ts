@@ -259,8 +259,12 @@ export class SearchService {
           continue;
         }
 
+        // One listing covers both what we need: the .embedding files to load, and (by
+        // diffing against the .md files already in hand) which entries are missing one.
+        // This keeps reconciliation free of any extra directory walk.
         const files = await fs.readdir(dayPath);
         const embeddingFiles = files.filter(file => file.endsWith('.embedding'));
+        const mdFiles = files.filter(file => file.endsWith('.md'));
 
         for (const embeddingFile of embeddingFiles) {
           try {
@@ -273,6 +277,29 @@ export class SearchService {
             // Continue with other files
           }
         }
+
+        // Reconcile: a .md file with no matching .embedding is a journal entry that was
+        // written but never got indexed (e.g. the embedding step failed, even after its own
+        // retry, when the entry was written). Pick those up here instead of waiting for a
+        // server restart (generateMissingEmbeddings only runs at startup) -- a failure for
+        // any one entry must not prevent the rest of this read from returning.
+        const embeddedBasenames = new Set(embeddingFiles.map(file => file.replace(/\.embedding$/, '')));
+        const unindexedMdFiles = mdFiles.filter(file => !embeddedBasenames.has(file.replace(/\.md$/, '')));
+
+        for (const mdFile of unindexedMdFiles) {
+          const mdPath = path.join(dayPath, mdFile);
+          try {
+            const content = await fs.readFile(mdPath, 'utf8');
+            const timestamp = this.extractTimestampFromContent(content) ?? new Date();
+            const result = await this.embeddingService.generateAndSaveEmbedding(mdPath, content, timestamp);
+            if (result.data) {
+              embeddings.push({ ...result.data, type });
+            }
+          } catch (error) {
+            console.error(`Failed to reconcile missing embedding for ${mdPath}:`, error);
+            // Leave it unindexed for this read; a later read will retry.
+          }
+        }
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
@@ -282,6 +309,12 @@ export class SearchService {
     }
 
     return embeddings;
+  }
+
+  private extractTimestampFromContent(content: string): Date | null {
+    const match = content.match(/^timestamp: (\d+)$/m);
+    if (!match) return null;
+    return new Date(parseInt(match[1], 10));
   }
 
   private generateExcerpt(text: string, query: string, maxLength: number = 200): string {

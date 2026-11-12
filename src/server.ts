@@ -178,12 +178,29 @@ export class PrivateJournalServer {
         }
 
         try {
-          await this.journalManager.writeThoughts(thoughts);
+          const result = await this.journalManager.writeThoughts(thoughts);
+          if (result.indexed) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: 'Thoughts recorded successfully.',
+                },
+              ],
+            };
+          }
+
+          // The .md file is on disk, but indexing failed (even after a retry), so this
+          // entry will not appear in list_recent_entries or search_journal results until
+          // it's reconciled on a later read. Say so plainly instead of claiming success.
           return {
             content: [
               {
                 type: 'text',
-                text: 'Thoughts recorded successfully.',
+                text:
+                  'Thoughts were saved to disk, but could not be indexed for search, so they ' +
+                  "won't show up in list_recent_entries or search_journal until that's " +
+                  `resolved. Error: ${result.errors.join('; ')}`,
               },
             ],
           };
