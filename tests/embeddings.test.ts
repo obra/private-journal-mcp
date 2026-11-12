@@ -308,7 +308,16 @@ TypeScript interfaces are really powerful for maintaining code quality.`;
       const dayDir = path.join(projectTempDir, '2025-05-31');
       await fs.mkdir(dayDir, { recursive: true });
       const linkPath = path.join(dayDir, 'link.md');
-      await fs.symlink(otherFile, linkPath);
+      try {
+        await fs.symlink(otherFile, linkPath);
+      } catch (error) {
+        // Windows only allows symlinks with admin rights or Developer Mode on.
+        if ((error as NodeJS.ErrnoException)?.code === 'EPERM') {
+          await fs.rm(outsideDir, { recursive: true, force: true });
+          return;
+        }
+        throw error;
+      }
 
       try {
         await expect(searchService.readEntry(linkPath)).rejects.toThrow(/not a readable journal entry/);
