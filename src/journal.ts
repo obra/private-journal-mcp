@@ -43,9 +43,9 @@ export class JournalManager {
     if (isSameJournalPath(this.projectJournalPath, this.userJournalPath)) {
       const hasContent = Object.values(thoughts).some(value => value !== undefined);
       if (hasContent) {
-        await this.writeThoughtsToLocation(thoughts, timestamp, this.projectJournalPath);
+        return this.writeThoughtsToLocation(thoughts, timestamp, this.projectJournalPath);
       }
-      return;
+      return { indexed: true, errors: [] };
     }
 
     // Split thoughts into project-local and user-global
