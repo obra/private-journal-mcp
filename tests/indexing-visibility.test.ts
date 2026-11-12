@@ -24,6 +24,7 @@ describe('embedding indexing visibility', () => {
   let searchService: SearchService;
   let embeddingService: any;
   let realGenerateEmbedding: (text: string) => Promise<number[]>;
+  let realGenerateAndSaveEmbedding: ((...args: unknown[]) => Promise<unknown>) | undefined;
 
   beforeEach(async () => {
     projectTempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'journal-project-test-'));
@@ -35,10 +36,14 @@ describe('embedding indexing visibility', () => {
     embeddingService = EmbeddingService.getInstance();
     embeddingService.embeddingRetryDelayMs = 1; // keep the retry fast in tests (no-op on main)
     realGenerateEmbedding = embeddingService.generateEmbedding.bind(embeddingService);
+    realGenerateAndSaveEmbedding = embeddingService.generateAndSaveEmbedding?.bind(embeddingService);
   });
 
   afterEach(async () => {
     embeddingService.generateEmbedding = realGenerateEmbedding;
+    if (realGenerateAndSaveEmbedding) {
+      embeddingService.generateAndSaveEmbedding = realGenerateAndSaveEmbedding;
+    }
     await fs.rm(projectTempDir, { recursive: true, force: true });
     await fs.rm(userTempDir, { recursive: true, force: true });
   });
@@ -155,5 +160,58 @@ describe('embedding indexing visibility', () => {
     const texts = recent.map(r => r.text);
     expect(texts.some(t => t.includes('entry that indexes fine'))).toBe(true);
     expect(texts.some(t => t.includes('entry whose reconcile will fail'))).toBe(false);
+  });
+
+  // Bounded read-time backfill, must-fix from review: a file that just failed backfill
+  // should not be retried again by the very next read -- otherwise every list/search call
+  // keeps hammering an embedder that's already failing.
+  test('a file that fails backfill is not retried again on the very next read', async () => {
+    const dayDir = path.join(userTempDir, '2026-01-03');
+    await fs.mkdir(dayDir, { recursive: true });
+    await fs.writeFile(
+      path.join(dayDir, '12-00-00-000000.md'),
+      '---\ntitle: "test"\ndate: 2026-01-03T12:00:00.000Z\ntimestamp: 1767441600000\n---\n\n' +
+        '## Observations\n\nfile whose backfill keeps failing\n',
+      'utf8'
+    );
+
+    let calls = 0;
+    embeddingService.generateAndSaveEmbedding = async () => {
+      calls++;
+      return { indexed: false, error: 'simulated persistent backfill failure' };
+    };
+
+    await searchService.listRecent({ type: 'user', limit: 10 });
+    expect(calls).toBe(1); // first read attempts the file once
+
+    await searchService.listRecent({ type: 'user', limit: 10 });
+    expect(calls).toBe(1); // immediately-following read must NOT retry it yet
+  });
+
+  // Bounded read-time backfill, must-fix from review: one read must not attempt to backfill
+  // every unindexed file in the whole history -- only up to maxBackfillPerCall of them.
+  test('one read backfills at most maxBackfillPerCall unindexed files', async () => {
+    const dayDir = path.join(userTempDir, '2026-01-04');
+    await fs.mkdir(dayDir, { recursive: true });
+    const filenames = ['12-00-00-000000.md', '12-00-01-000000.md', '12-00-02-000000.md'];
+    for (const name of filenames) {
+      await fs.writeFile(
+        path.join(dayDir, name),
+        '---\ntitle: "test"\ndate: 2026-01-04T12:00:00.000Z\ntimestamp: 1767528000000\n---\n\n' +
+          `## Observations\n\n${name} needs backfill\n`,
+        'utf8'
+      );
+    }
+
+    (searchService as any).maxBackfillPerCall = 1;
+
+    let calls = 0;
+    embeddingService.generateAndSaveEmbedding = async () => {
+      calls++;
+      return { indexed: true };
+    };
+
+    await searchService.listRecent({ type: 'user', limit: 10 });
+    expect(calls).toBe(1); // capped to 1 attempt even though 3 files needed backfill
   });
 });

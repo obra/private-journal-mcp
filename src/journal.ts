@@ -5,6 +5,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { resolveUserJournalPath } from './paths.js';
 import { EmbeddingService } from './embeddings.js';
+import { backfillEntryFile, isJournalEntryFilename } from './entry-files.js';
 
 // Result of a process_thoughts write. `indexed: false` means the entry was written to disk
 // (the .md file exists) but the embedding step failed even after a retry, so it will not
@@ -200,7 +201,7 @@ ${sections.join('\n\n')}
           }
 
           const files = await fs.readdir(dayPath);
-          const mdFiles = files.filter(file => file.endsWith('.md'));
+          const mdFiles = files.filter(isJournalEntryFilename);
 
           for (const mdFile of mdFiles) {
             const mdPath = path.join(dayPath, mdFile);
@@ -212,9 +213,7 @@ ${sections.join('\n\n')}
             } catch {
               // Generate missing embedding
               console.error(`Generating missing embedding for ${mdPath}`);
-              const content = await fs.readFile(mdPath, 'utf8');
-              const timestamp = this.extractTimestampFromPath(mdPath) || new Date();
-              await this.generateEmbeddingForEntry(mdPath, content, timestamp);
+              await backfillEntryFile(this.embeddingService, mdPath, dayDir);
               count++;
             }
           }
@@ -227,23 +226,6 @@ ${sections.join('\n\n')}
     }
     
     return count;
-  }
-
-  private extractTimestampFromPath(filePath: string): Date | null {
-    const filename = path.basename(filePath, '.md');
-    const match = filename.match(/^(\d{2})-(\d{2})-(\d{2})-\d{6}$/);
-    
-    if (!match) return null;
-    
-    const [, hours, minutes, seconds] = match;
-    const dirName = path.basename(path.dirname(filePath));
-    const dateMatch = dirName.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    
-    if (!dateMatch) return null;
-    
-    const [, year, month, day] = dateMatch;
-    return new Date(parseInt(year), parseInt(month) - 1, parseInt(day), 
-                   parseInt(hours), parseInt(minutes), parseInt(seconds));
   }
 
   private async ensureDirectoryExists(dirPath: string): Promise<void> {

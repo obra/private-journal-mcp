@@ -124,9 +124,15 @@ export class EmbeddingService {
     return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
   }
 
+  // Writes via a temp file in the same directory, then renames over the real path. rename()
+  // is atomic on the same filesystem, so a concurrent reader (the read-time backfill in
+  // SearchService can run alongside the startup repair, or alongside another write, all in
+  // one process per session) never observes a partially-written .embedding file.
   async saveEmbedding(filePath: string, embeddingData: EmbeddingData): Promise<void> {
     const embeddingPath = filePath.replace(/\.md$/, '.embedding');
-    await fs.writeFile(embeddingPath, JSON.stringify(embeddingData, null, 2), 'utf8');
+    const tempPath = `${embeddingPath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    await fs.writeFile(tempPath, JSON.stringify(embeddingData, null, 2), 'utf8');
+    await fs.rename(tempPath, embeddingPath);
   }
 
   // Generates and persists the .embedding sidecar for a journal entry, retrying once after

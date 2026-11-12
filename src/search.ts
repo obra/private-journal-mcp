@@ -5,6 +5,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { EmbeddingService, EmbeddingData } from './embeddings.js';
 import { resolveUserJournalPath, resolveProjectJournalPath } from './paths.js';
+import { backfillEntryFile, isJournalEntryFilename } from './entry-files.js';
 
 export interface SearchResult {
   path: string;
@@ -39,6 +40,23 @@ export class SearchService {
   private embeddingService: EmbeddingService;
   private projectPath: string;
   private userPath: string;
+
+  // Read-time backfill tuning (see loadEmbeddingsFromPath). Public, mutable fields --
+  // mirrors EmbeddingService.initTimeoutMs / embeddingRetryDelayMs -- so tests can shrink
+  // them instead of waiting on real timers or creating hundreds of files.
+  //
+  // Caps how many unindexed .md files a single loadEmbeddingsFromPath call will attempt to
+  // backfill. Without this, "list the last 5" pays to re-embed the entire history's worth of
+  // failed entries on every call, which is exactly the wrong time to add embedding load if
+  // the embedder is what's failing.
+  maxBackfillPerCall = 5;
+  // Minimum time to wait before retrying a file that just failed backfill, so a persistently
+  // broken embedder doesn't get hammered by every list/search call. Keyed by absolute file
+  // path; see recentBackfillFailures below.
+  backfillBackoffMs = 5 * 60 * 1000;
+  // Injectable clock so tests can simulate the backoff window elapsing without a real sleep.
+  now: () => number = () => Date.now();
+  private recentBackfillFailures = new Map<string, number>();
 
   constructor(projectPath?: string, userPath?: string) {
     this.embeddingService = EmbeddingService.getInstance();
@@ -247,6 +265,9 @@ export class SearchService {
     type: 'project' | 'user'
   ): Promise<Array<EmbeddingData & { type: 'project' | 'user' }>> {
     const embeddings: Array<EmbeddingData & { type: 'project' | 'user' }> = [];
+    // Per-call cap on read-time backfill attempts (see the reconcile step below), shared
+    // across all day directories under this one basePath.
+    let backfillBudget = this.maxBackfillPerCall;
 
     try {
       const dayDirs = await fs.readdir(basePath);
@@ -264,7 +285,7 @@ export class SearchService {
         // This keeps reconciliation free of any extra directory walk.
         const files = await fs.readdir(dayPath);
         const embeddingFiles = files.filter(file => file.endsWith('.embedding'));
-        const mdFiles = files.filter(file => file.endsWith('.md'));
+        const mdFiles = files.filter(isJournalEntryFilename);
 
         for (const embeddingFile of embeddingFiles) {
           try {
@@ -283,21 +304,39 @@ export class SearchService {
         // retry, when the entry was written). Pick those up here instead of waiting for a
         // server restart (generateMissingEmbeddings only runs at startup) -- a failure for
         // any one entry must not prevent the rest of this read from returning.
+        //
+        // Bounded by maxBackfillPerCall and recentBackfillFailures: without a cap, "list the
+        // last 5" would try to re-embed every unindexed entry in the whole history on every
+        // call, and without a backoff it would retry a file that just failed on the very next
+        // call too -- both add embedding load exactly when the embedder is already failing.
         const embeddedBasenames = new Set(embeddingFiles.map(file => file.replace(/\.embedding$/, '')));
         const unindexedMdFiles = mdFiles.filter(file => !embeddedBasenames.has(file.replace(/\.md$/, '')));
 
         for (const mdFile of unindexedMdFiles) {
+          if (backfillBudget <= 0) break;
+
           const mdPath = path.join(dayPath, mdFile);
+          const lastFailure = this.recentBackfillFailures.get(mdPath);
+          if (lastFailure !== undefined && this.now() - lastFailure < this.backfillBackoffMs) {
+            continue; // failed recently -- back off instead of retrying every call
+          }
+
+          backfillBudget--;
           try {
-            const content = await fs.readFile(mdPath, 'utf8');
-            const timestamp = this.extractTimestampFromContent(content) ?? new Date();
-            const result = await this.embeddingService.generateAndSaveEmbedding(mdPath, content, timestamp);
-            if (result.data) {
-              embeddings.push({ ...result.data, type });
+            const result = await backfillEntryFile(this.embeddingService, mdPath, dayDir);
+            if (result.indexed) {
+              this.recentBackfillFailures.delete(mdPath);
+              if (result.data) {
+                embeddings.push({ ...result.data, type });
+              }
+            } else {
+              this.recentBackfillFailures.set(mdPath, this.now());
             }
           } catch (error) {
             console.error(`Failed to reconcile missing embedding for ${mdPath}:`, error);
-            // Leave it unindexed for this read; a later read will retry.
+            this.recentBackfillFailures.set(mdPath, this.now());
+            // Leave it unindexed for this read; a later read will retry once the backoff
+            // window passes.
           }
         }
       }
@@ -309,12 +348,6 @@ export class SearchService {
     }
 
     return embeddings;
-  }
-
-  private extractTimestampFromContent(content: string): Date | null {
-    const match = content.match(/^timestamp: (\d+)$/m);
-    if (!match) return null;
-    return new Date(parseInt(match[1], 10));
   }
 
   private generateExcerpt(text: string, query: string, maxLength: number = 200): string {
